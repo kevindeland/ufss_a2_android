@@ -4,8 +4,6 @@ import android.graphics.Color;
 import android.os.Bundle;
 import android.support.v7.app.ActionBarActivity;
 import android.util.Log;
-import android.view.Menu;
-import android.view.MenuItem;
 import android.view.MotionEvent;
 import android.view.SubMenu;
 import android.view.SurfaceView;
@@ -14,7 +12,6 @@ import android.view.WindowManager;
 import android.widget.TextView;
 
 import com.androidplot.Plot;
-import com.androidplot.util.PlotStatistics;
 import com.androidplot.util.Redrawer;
 import com.androidplot.xy.BoundaryMode;
 import com.androidplot.xy.LineAndPointFormatter;
@@ -26,7 +23,10 @@ import org.opencv.android.BaseLoaderCallback;
 import org.opencv.android.CameraBridgeViewBase;
 import org.opencv.android.LoaderCallbackInterface;
 import org.opencv.android.OpenCVLoader;
+import org.opencv.core.Core;
 import org.opencv.core.Mat;
+import org.opencv.core.Scalar;
+import org.w3c.dom.Text;
 
 import java.io.BufferedWriter;
 import java.io.File;
@@ -34,18 +34,29 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Random;
 
 public class VisionActivity extends ActionBarActivity implements CameraBridgeViewBase.CvCameraViewListener2
 {
     private final String TAG = "APP";
     private Tutorial3View mOpenCvCameraView;
     private SubMenu mColorEffectsMenu;
-    TextView rgbVal;
     float lastTouchY=0;
     int cannyThreshold=50;
 
-    
+    int TIME_WINDOW_SIZE = 256;
+    int TOLERANCE = 20;
+
+    //
+    private double LOW_PASS_FILTER_COMPARISON = 2.0;
+
+    ArrayList<Double> timeWindow = new ArrayList<Double>(); // window of red values
+    ArrayList<Long> timeWindowTimes = new ArrayList<Long>(); // window of times for those vals
+    double windowMin = 256;
+    double windowMax = -1;
+
+
+    ArrayList<Double> heartRateWindow = new ArrayList<Double>();
+    int HR_MOVING_AVERAGE_SIZE = 10;
 
     private boolean flashOn = false;
 
@@ -57,15 +68,15 @@ public class VisionActivity extends ActionBarActivity implements CameraBridgeVie
     private XYPlot colorPlot = null;
     private XYPlot bonusPlot = null;
 
-    private SimpleXYSeries rHistorySeries; // history of red values
-    private SimpleXYSeries tHistorySeries; // history of time associated w/ red
+    private XYPlot freqPlot = null;
+
     ArrayList<Double> redValues;
 
-    private boolean JUST_RED = true;
-    private SimpleXYSeries gHistorySeries;
-    ArrayList<Double> greenValues;
-    private SimpleXYSeries bHistorySeries;
-    ArrayList<Double> blueValues;
+    private SimpleXYSeries rHistorySeries; // history of red values
+    private SimpleXYSeries tHistorySeries; // history of time associated w/ red
+
+    private SimpleXYSeries freqSeries;
+
 
     private Redrawer redrawer;
 
@@ -76,6 +87,8 @@ public class VisionActivity extends ActionBarActivity implements CameraBridgeVie
     Float ave = new Float(0);
 
     ArrayList<Float> testArray;
+
+    boolean CALCULATING_FFT = false;
 
 
     private BaseLoaderCallback mLoaderCallback = new BaseLoaderCallback(this) {
@@ -110,48 +123,46 @@ public class VisionActivity extends ActionBarActivity implements CameraBridgeVie
 
         initTs = System.currentTimeMillis();
         prevTs = initTs;
-        rgbVal = (TextView) findViewById(R.id.rgbVal);
+
 
         redValues = new ArrayList<Double>();
 
-        if(!JUST_RED) {
-            greenValues = new ArrayList<Double>();
-            blueValues = new ArrayList<Double>();
-        }
 
         // set up graphs!
         colorPlot = (XYPlot) findViewById(R.id.colorValuePlot);
         bonusPlot = (XYPlot) findViewById(R.id.bonusPlot);
         bonusPlot.setVisibility(View.GONE);
+        freqPlot = (XYPlot) findViewById(R.id.freqPlot);
 
         rHistorySeries = new SimpleXYSeries("red");
         rHistorySeries.useImplicitXVals();
         tHistorySeries = new SimpleXYSeries("time");
 
+        freqSeries = new SimpleXYSeries("freq");
 
-        if(!JUST_RED) {
-            gHistorySeries = new SimpleXYSeries("green");
-            gHistorySeries.useImplicitXVals();
-            bHistorySeries = new SimpleXYSeries("blue");
-            bHistorySeries.useImplicitXVals();
-        }
+
 
         colorPlot.setDomainBoundaries(0, BUFFER_SIZE, BoundaryMode.FIXED);
-       if(JUST_RED) {
-           colorPlot.setRangeBoundaries(170, 220, BoundaryMode.FIXED);
-           colorPlot.setRangeStepMode(StepMode.INCREMENT_BY_VAL);
-           colorPlot.setRangeStepValue(10);
-       }else {
-           colorPlot.setRangeBoundaries(0, 256, BoundaryMode.FIXED);
-       }
-        colorPlot.addSeries(rHistorySeries, new LineAndPointFormatter(Color.rgb(200, 100, 100), null, null, null));
-        if(!JUST_RED) {
-            colorPlot.addSeries(gHistorySeries, new LineAndPointFormatter(Color.rgb(100, 200, 100), null, null, null));
-            colorPlot.addSeries(bHistorySeries, new LineAndPointFormatter(Color.rgb(100, 100, 200), null, null, null));
-        }
 
-      //  final PlotStatistics colorStats = new PlotStatistics(1000, false);
-        redrawer = new Redrawer(Arrays.asList(new Plot[]{colorPlot}), 100, false);
+        colorPlot.setRangeBoundaries(150, 220, BoundaryMode.FIXED);
+        colorPlot.setRangeStepMode(StepMode.INCREMENT_BY_VAL);
+        colorPlot.setRangeStepValue(10);
+
+        colorPlot.addSeries(rHistorySeries, new LineAndPointFormatter(Color.rgb(200, 100, 100), null, null, null));
+
+        // TODO
+        int MAX_FREQ = 256;
+        freqPlot.setDomainBoundaries(0, MAX_FREQ, BoundaryMode.FIXED);
+        freqPlot.setRangeBoundaries(0, 0.1, BoundaryMode.FIXED);
+        freqPlot.setRangeStepMode(StepMode.INCREMENT_BY_VAL);
+        freqPlot.setRangeStepValue(0.01);
+        freqPlot.setDomainLabel("frequency (cycles per sample)");
+
+        freqPlot.addSeries(freqSeries, new LineAndPointFormatter(Color.rgb(100, 200, 200), null, null, null));
+
+
+        //  final PlotStatistics colorStats = new PlotStatistics(1000, false);
+        redrawer = new Redrawer(Arrays.asList(new Plot[]{colorPlot, freqPlot}), 100, false);
 
     }
 
@@ -181,32 +192,19 @@ public class VisionActivity extends ActionBarActivity implements CameraBridgeVie
 
     }
 
-    @Override
-    public boolean onCreateOptionsMenu(Menu menu) {
-        mColorEffectsMenu = menu.addSubMenu("Flash On");
-        mColorEffectsMenu = menu.addSubMenu("Flash Off");
-        return true;
-    }
-
-    public boolean onOptionsItemSelected(MenuItem item) {
-        Log.i(TAG, "called onOptionsItemSelected; selected item: " + item);
-
-        if (item.toString() == "Flash On") {
-            mOpenCvCameraView.setFlashOn();
-        } else if (item.toString() == "Flash Off") {
-            mOpenCvCameraView.setFlashOff();
-        }
-        return true;
-    }
 
     public void toggleFlash(View view) {
         if(flashOn) {
             Log.d(TAG, "Turning off Flash");
             flashOn = false;
+            TextView flashButton = (TextView) findViewById(R.id.toggle);
+            flashButton.setText("TURN ON FLASH");
             mOpenCvCameraView.setFlashOff();
         } else {
             Log.d(TAG, "Turning on Flash");
             flashOn = true;
+            TextView flashButton = (TextView) findViewById(R.id.toggle);
+            flashButton.setText("TURN OFF FLASH");
             mOpenCvCameraView.setFlashOn();
         }
     }
@@ -225,7 +223,7 @@ public class VisionActivity extends ActionBarActivity implements CameraBridgeVie
         float mean= (float) 0.0;
        for (int i=0;i<values.size();i++)
        {
-           Log.d(TAG, values.get(i) + "");
+           //Log.d(TAG, values.get(i) + "");
            mean += values.get(i);
 
        }
@@ -233,102 +231,146 @@ public class VisionActivity extends ActionBarActivity implements CameraBridgeVie
         return mean;
     }
 
+
+    private void updateText(final TextView v, final String text) {
+        if (v != null) {
+            new Thread() {
+                public void run() {
+                    VisionActivity.this.runOnUiThread(new Runnable() {
+                        public void run() {
+                            v.setText(text);
+                        }
+                    });
+                }
+            }.start();
+        }
+    }
+
+    private void setFFTMessage(String message) {
+        TextView fftStatus = (TextView) findViewById(R.id.fftStatus);
+        updateText(fftStatus, message);
+    }
+
+    private void setHeartRate(String message) {
+        TextView heartRateVal = (TextView) findViewById(R.id.heartRateVal);
+        updateText(heartRateVal, message);
+    }
+
+
     @Override
     public Mat onCameraFrame(CameraBridgeViewBase.CvCameraViewFrame inputFrame) {
 
         Mat currentFrame = inputFrame.rgba();
 
         long now = System.currentTimeMillis();
-        boolean useSampleRate = false;
-        if(useSampleRate && ((now - prevTs) < sampleRate)) {
-            return currentFrame;
-        }
+
+        double x =  Core.sumElems(currentFrame).val[0];
+        double redMean = x / (currentFrame.rows() * currentFrame.cols());
 
         // TODO for now, assume that each sample is exactly 100ms apart
-
+/*
         String debugString;
 
-        int windowSize = 4;
-        Mat window = currentFrame.submat(currentFrame.rows()/2 - windowSize/2,
-                            currentFrame.rows()/2 + windowSize/2,
-                            currentFrame.cols()/2 - windowSize/2,
-                            currentFrame.cols()/2 + windowSize/2);
-        Log.d(TAG, "window size " + window.rows() +", " +
-                window.cols());
-
-        // TODO
         // collect color values of every pixel within window
+        int pixelWindowSize = 8;
+        Mat pixelWindow = currentFrame.submat(currentFrame.rows()/2 - pixelWindowSize/2,
+                            currentFrame.rows()/2 + pixelWindowSize/2,
+                            currentFrame.cols()/2 - pixelWindowSize/2,
+                            currentFrame.cols()/2 + pixelWindowSize/2);
+        //Log.d(TAG, "window size " + pixelWindow.rows() +", " +
+//                pixelWindow.cols());
+
+
 
         // put it in the graph
         ArrayList<Double> reds = new ArrayList<Double>();
 
-            ArrayList<Double> greens = new ArrayList<Double>();
-            ArrayList<Double> blues = new ArrayList<Double>();
 
-        for(int i = 0; i < window.rows(); i++) {
-            for (int j = 0; j < window.cols(); j++) {
-                double[] pixel = window.get(i, j);
+        for(int i = 0; i < pixelWindow.rows(); i++) {
+            for (int j = 0; j < pixelWindow.cols(); j++) {
+                double[] pixel = pixelWindow.get(i, j);
                 reds.add(pixel[0]);
-                if(!JUST_RED) {
-                    greens.add(pixel[1]);
-                    blues.add(pixel[2]);
-                }
+
             }
         }
 
         // get the average
         double redMean = calculateMean(reds);
-        double greenMean = 0;
-        double blueMean = 0;
-        if(!JUST_RED) {
-            greenMean = calculateMean(greens);
-            blueMean = calculateMean(blues);
-        }
+*/
+
 
         double[] pixel = currentFrame.get(currentFrame.rows() / 2, currentFrame.cols() / 2);
         //debugString = "R " + pixel[0] + "; G " + pixel[1] + "; B " + pixel[3];
-        debugString = "R " + redMean; // + "; G " + greenMean + "; B " + blueMean;
-        Log.d(TAG, debugString);
+        //debugString = "R " + redMean; // + "; G " + greenMean + "; B " + blueMean;
+        // Log.d(TAG, debugString);
 
         long timeElapsed = System.currentTimeMillis() - initTs;
-        Log.d(TAG, "Time Elapsed: " + timeElapsed);
+        //Log.d(TAG, "Time Elapsed: " + timeElapsed);
 
+        // display buffer
         if(redValues.size() > BUFFER_SIZE) {
             // FIXME is this right?
             redValues.remove(0);
             rHistorySeries.removeFirst();
             tHistorySeries.removeFirst();
-            if(!JUST_RED) {
-                greenValues.remove(0);
-                gHistorySeries.removeFirst();
-                blueValues.remove(0);
-                bHistorySeries.removeFirst();
+
+        }
+
+        if(redMean > windowMax) {
+            windowMax = redMean;
+            Log.d(TAG, "New Max: " + windowMax);
+            if(windowMax - windowMin > TOLERANCE) {
+                // reset window
+                timeWindow.clear();
+                timeWindowTimes.clear();
+                windowMin = 256;
+                windowMax = -1;
+                Log.d(TAG, "TOLERANCE exceeded, resetting window");
+                setFFTMessage("waiting for steady signal...");
+            }
+
+        }
+
+        if (redMean < windowMin) {
+            windowMin = redMean;
+            Log.d(TAG, "New Min: " + windowMin);
+            if(windowMax - windowMin > TOLERANCE) {
+                // reset window
+                timeWindow.clear();
+                timeWindowTimes.clear();
+                windowMin = 256;
+                windowMax = -1;
+                Log.d(TAG, "TOLERANCE exceeded, resetting window");
+                setFFTMessage("waiting for steady signal...");
             }
         }
+
+        timeWindow.add(redMean);
+        timeWindowTimes.add(now);
+
+
+        // calculation window
+        if (timeWindow.size() >= TIME_WINDOW_SIZE) {
+
+            setFFTMessage("calculating using FFT...");
+
+            if(! CALCULATING_FFT) {
+                calculateFFT();
+            }
+
+            // drop first value
+            timeWindow.remove(0);
+            timeWindowTimes.remove(0);
+
+        }
+
 
         redValues.add(redMean);
         rHistorySeries.addLast(null, redMean);
         tHistorySeries.addLast(null, now);
-        if(!JUST_RED) {
-            greenValues.add(greenMean);
-            gHistorySeries.addLast(null, greenMean);
-            blueValues.add(blueMean);
-            bHistorySeries.addLast(null, blueMean);
-        }
+
 
         prevTs = now;
-
-        // TODO next steps...
-        // TODO check for consistent pattern
-        // what is the derivative? will that help me see direction changes?
-
-
-        // TODO can we "zoom" the graph into the red values?
-        // TODO what if we take a "moving average"?
-
-        // TODO save data?
-
-
 
 
 
@@ -339,6 +381,108 @@ public class VisionActivity extends ActionBarActivity implements CameraBridgeVie
 
 
         return currentFrame;
+    }
+
+    private void calculateFFT() {
+
+        CALCULATING_FFT = true;
+
+
+        // magnitude calculations
+        int N = timeWindow.size();
+        double sum = 0.0;
+        for(int i = 0; i < N; i++) {
+            sum+= timeWindow.get(i);
+        }
+        double mean = sum / (double) N;
+
+        Log.d(TAG, "there are " + N + " elements in time window");
+        double[] reals = new double[N];
+        double[] imaginaries = new double[N];
+
+        for(int i = 0; i< N; i++) {
+            reals[i] = timeWindow.get(i) - mean; // don't forget to detrend!!!
+            imaginaries[i] = 0;
+        }
+
+        double[] fourier = FFTbase.fft(reals, imaginaries, true);
+        Log.d(TAG, "Performed FFT, maybe");
+        Log.d(TAG, "" + fourier);
+
+        // what is the sample time?
+        long totalWindowTime = timeWindowTimes.get(N-1) - timeWindowTimes.get(0);
+        double meanSampleTimeS = totalWindowTime / (double) N / (double) 1000;
+        double meanSampleTimeMin = meanSampleTimeS / 60;
+        Log.d(TAG, "mean sample time in seconds: " + meanSampleTimeS);
+        Log.d(TAG, "mean sample time in minutes: " + meanSampleTimeMin);
+
+        freqSeries.clear();
+
+        for(int i = 0; i < N; i++) {
+            double mag = 2.0 / N * Math.abs(fourier[i]);
+            double freqPerMs= i / (double) meanSampleTimeS;
+            double freqPerSecond = freqPerMs * 1000;
+            double freqPerMinute = freqPerSecond * 60;
+           // freqSeries.addLast(freqPerMinute, mag);
+            freqSeries.addLast(i, mag);
+        }
+
+        //int MAX_FREQ = (int) (N / ((double) meanSampleTimeS) *1000 * 60);
+
+
+
+        int MIN_HEART_RATE = 40;
+        int INDEX_THRESHOLD = (int) (MIN_HEART_RATE * 2 * meanSampleTimeMin * 256);
+        Log.d(TAG, "won't count frequencies at index higher than " + INDEX_THRESHOLD);
+
+
+        double lpfAmplitude = 0; // amplitude for low frequencies...
+        for(int i = 0; i < INDEX_THRESHOLD; i++) {
+            if(fourier[i] > lpfAmplitude) {
+                lpfAmplitude = fourier[i];
+            }
+        }
+
+        double maxAmplitude = 0;
+        int maxIndex = -1;
+
+        for(int i = INDEX_THRESHOLD; i < N; i++) {
+            if (fourier[i] > maxAmplitude) {
+                maxAmplitude = fourier[i];
+                maxIndex = i;
+            }
+        }
+
+        // if the amplitude is strong enough relative to low filter signal, update heart rate
+        Log.d(TAG, "comparing " + maxAmplitude + " to " + lpfAmplitude);
+
+        if(maxAmplitude * LOW_PASS_FILTER_COMPARISON > lpfAmplitude) {
+            double heartRate = maxIndex / (2 * meanSampleTimeMin * 256);
+
+            heartRateWindow.add(heartRate);
+
+            if(heartRateWindow.size() > HR_MOVING_AVERAGE_SIZE) {
+                heartRateWindow.remove(0);
+
+                int hrMean = (int) calculateMean(heartRateWindow);
+                setHeartRate("heart rate = " + hrMean);
+            }
+
+
+        } else {
+            setHeartRate("signal still noisy...");
+            heartRateWindow.clear();
+        }
+
+        /*
+        testing display with random noise
+        int DATA_SIZE = 256;
+        for (int i = 0; i < DATA_SIZE; i++) {
+            freqSeries.addLast(i, Math.random());
+        }
+*/
+
+        CALCULATING_FFT = false;
     }
 
     public double calculateDifference(double lastVal, double currentVal) {
@@ -425,4 +569,5 @@ public class VisionActivity extends ActionBarActivity implements CameraBridgeVie
             e.printStackTrace();
         }
     }
+
 }

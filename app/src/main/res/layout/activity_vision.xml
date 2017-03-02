@@ -25,10 +25,8 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:textAppearance="?android:attr/textAppearanceSmall"
-        android:text="Small Text"
-        android:id="@+id/rgbVal"
-        android:layout_below="@+id/HelloOpenCvView"
-        android:layout_alignParentStart="true"
+        android:text="heart rate = ..."
+        android:id="@+id/heartRateVal"
         android:background="#8647ff"
         android:textColor="#fffbd0" />
 
@@ -38,13 +36,22 @@
         android:orientation="horizontal"
         android:weightSum="6">
 
+        <TextView
+            android:layout_width="fill_parent"
+            android:layout_height="wrap_content"
+            android:text="Test Text"
+            android:id="@+id/fftStatus"
+            android:background="#8647ff"
+            android:textColor="#fffbd0"
+            android:layout_weight="2"/>
+
         <Button
-            android:text="FLASH TOGGLE"
+            android:text="TURN ON FLASH"
             android:layout_width="fill_parent"
             android:layout_height="wrap_content"
             android:id="@+id/toggle"
             android:onClick="toggleFlash"
-            android:layout_weight="3"/>
+            android:layout_weight="2"/>
 
         <Button
             android:layout_width="fill_parent"
@@ -52,19 +59,23 @@
             android:text="Save Data"
             android:onClick="saveData"
             android:id="@+id/saveDataButton"
-            android:layout_weight="3"/>
+            android:layout_weight="2"/>
     </LinearLayout>
 
-
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:id="@+id/heartRate"
+        android:text="0"/>
 
     <com.androidplot.xy.XYPlot
         android:id="@+id/colorValuePlot"
         android:layout_width="fill_parent"
         android:layout_height="wrap_content"
         android:layout_weight="1"
-        ap:title="A Simple XY Plot"
-        ap:rangeTitle="range"
-        ap:domainTitle="domain"
+        ap:title="Time Series Plot"
+        ap:rangeTitle="red values"
+        ap:domainTitle="time"
         ap:lineLabels="left|bottom"
         ap:lineLabelRotationBottom="-45" />
 
@@ -76,6 +87,17 @@
         ap:title="A Simple XY Plot"
         ap:rangeTitle="range"
         ap:domainTitle="domain"
+        ap:lineLabels="left|bottom"
+        ap:lineLabelRotationBottom="-45" />
+
+    <com.androidplot.xy.XYPlot
+        android:id="@+id/freqPlot"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        ap:title="Frequency Plot"
+        ap:rangeTitle="intensity"
+        ap:domainTitle="frequency"
         ap:lineLabels="left|bottom"
         ap:lineLabelRotationBottom="-45" />
 
